@@ -1,4 +1,4 @@
-‎# סורק דירות להשכרה בחדרה - שולח התראה לטלגרם על כל מודעה חדשה שמתאימה
+# Hadera rental apartment scanner - sends a Telegram alert for every new matching listing
 import json
 import os
 import re
@@ -6,14 +6,14 @@ import time
 
 import requests
 
-‎# ===== התנאים שלך (אפשר לשנות כאן) =====
+# ===== Your search conditions (edit here) =====
 SEARCH_URL = "https://www.yad2.co.il/realestate/rent?city=6500&minPrice=5000&maxPrice=7000&minRooms=4"
-CITY = "חדרה"
+CITY = "\u05d7\u05d3\u05e8\u05d4"
 MIN_PRICE = 5000
 MAX_PRICE = 7000
 MIN_ROOMS = 4
-STREET_KEYWORDS = ["בגין", "זהבי"]          # גבעת אולגה: מנחם בגין, רחבעם זהבי
-NEIGHBORHOOD_KEYWORDS = ["עין הים"]         # כל השכונה
+STREET_KEYWORDS = ["\u05d1\u05d2\u05d9\u05df", "\u05d6\u05d4\u05d1\u05d9"]          # Givat Olga: Menachem Begin, Rehavam Zeevi
+NEIGHBORHOOD_KEYWORDS = ["\u05e2\u05d9\u05df \u05d4\u05d9\u05dd"]         # whole neighborhood
 # ========================================
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -127,16 +127,16 @@ def matches(d):
 
 def format_message(d):
     address = " ".join(str(x) for x in [d["street"], d["house"] or ""] if x).strip()
-    lines = ["🏠 דירה חדשה שמתאימה לך!"]
+    lines = ["\U0001f3e0 \u05d3\u05d9\u05e8\u05d4 \u05d7\u05d3\u05e9\u05d4 \u05e9\u05de\u05ea\u05d0\u05d9\u05de\u05d4 \u05dc\u05da!"]
     if address:
-        lines.append(f"📍 {address}" + (f", {d['neighborhood']}" if d["neighborhood"] else ""))
+        lines.append(f"\U0001f4cd {address}" + (f", {d['neighborhood']}" if d["neighborhood"] else ""))
     if d["price"]:
-        lines.append(f"💰 {int(d['price']):,} ₪")
+        lines.append(f"\U0001f4b0 {int(d['price']):,} \u20aa")
     if d["rooms"]:
-        lines.append(f"🛏 {d['rooms']:g} חדרים" + (f" | {d['sqm']} מ\"ר" if d["sqm"] else ""))
+        lines.append(f"\U0001f6cf {d['rooms']:g} \u05d7\u05d3\u05e8\u05d9\u05dd" + (f" | {d['sqm']} \u05de\"\u05e8" if d["sqm"] else ""))
     if d["floor"] is not None:
-        lines.append(f"🏢 קומה {d['floor']}")
-    lines.append(f"🔗 https://www.yad2.co.il/realestate/item/{d['token']}")
+        lines.append(f"\U0001f3e2 \u05e7\u05d5\u05de\u05d4 {d['floor']}")
+    lines.append(f"\U0001f517 https://www.yad2.co.il/realestate/item/{d['token']}")
     return "\n".join(lines)
 
 
@@ -150,7 +150,7 @@ def main():
     if listings is None:
         print("could not read Yad2, status:", status)
         if not state.get("blocked_notified"):
-            send("⚠️ הסורק לא הצליח לקרוא את יד2 כרגע (ייתכן חסימה). ממשיך לנסות.")
+            send("\u26a0\ufe0f \u05d4\u05e1\u05d5\u05e8\u05e7 \u05dc\u05d0 \u05d4\u05e6\u05dc\u05d9\u05d7 \u05dc\u05e7\u05e8\u05d5\u05d0 \u05d0\u05ea \u05d9\u05d32 \u05db\u05e8\u05d2\u05e2 (\u05d9\u05d9\u05ea\u05db\u05df \u05d7\u05e1\u05d9\u05de\u05d4). \u05de\u05de\u05e9\u05d9\u05da \u05dc\u05e0\u05e1\u05d5\u05ea.")
             state["blocked_notified"] = True
         save_state(state)
         return
@@ -170,8 +170,8 @@ def main():
 
     print(f"found {len(listings)} listings, {len(new_matches)} new matches")
     if first_run:
-        send(f"✅ הסורק פעיל! נסרקו {len(listings)} מודעות בחדרה, "
-             f"מתוכן {len(new_matches)} מתאימות לתנאים שלך.")
+        send(f"\u2705 \u05d4\u05e1\u05d5\u05e8\u05e7 \u05e4\u05e2\u05d9\u05dc! \u05e0\u05e1\u05e8\u05e7\u05d5 {len(listings)} \u05de\u05d5\u05d3\u05e2\u05d5\u05ea \u05d1\u05d7\u05d3\u05e8\u05d4, "
+             f"\u05de\u05ea\u05d5\u05db\u05df {len(new_matches)} \u05de\u05ea\u05d0\u05d9\u05de\u05d5\u05ea \u05dc\u05ea\u05e0\u05d0\u05d9\u05dd \u05e9\u05dc\u05da.")
 
     for d in new_matches[:15]:
         send(format_message(d))
