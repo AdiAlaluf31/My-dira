@@ -7,25 +7,40 @@ import time
 import requests
 
 # ===== Your search conditions (edit here) =====
-SEARCH_URL = "https://www.yad2.co.il/realestate/rent?city=6500&minPrice=5000&maxPrice=7000&minRooms=4"
+CITY_CODE = 6500  # Hadera
 CITY = "\u05d7\u05d3\u05e8\u05d4"
 MIN_PRICE = 5000
 MAX_PRICE = 7000
 MIN_ROOMS = 4
 STREET_KEYWORDS = ["\u05d1\u05d2\u05d9\u05df", "\u05d6\u05d4\u05d1\u05d9"]          # Givat Olga: Menachem Begin, Rehavam Zeevi
 NEIGHBORHOOD_KEYWORDS = ["\u05e2\u05d9\u05df \u05d4\u05d9\u05dd"]         # whole neighborhood
-# ========================================
+# ==============================================
+
+SOURCES = [
+    ("page", f"https://www.yad2.co.il/realestate/rent?city={CITY_CODE}&minPrice={MIN_PRICE}&maxPrice={MAX_PRICE}&minRooms={MIN_ROOMS}"),
+    ("api", f"https://gw.yad2.co.il/realestate-feed/rent/map?city={CITY_CODE}&minPrice={MIN_PRICE}&maxPrice={MAX_PRICE}&minRooms={MIN_ROOMS}"),
+    ("api", f"https://gw.yad2.co.il/feed-search-legacy/realestate/rent?city={CITY_CODE}&price={MIN_PRICE}-{MAX_PRICE}&rooms={MIN_ROOMS}--1"),
+]
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 STATE_FILE = "seen.json"
 
-HEADERS = {
+BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/128.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
+                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
+    "sec-ch-ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
 }
+PAGE_HEADERS = {**BROWSER_HEADERS,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Upgrade-Insecure-Requests": "1"}
+API_HEADERS = {**BROWSER_HEADERS,
+               "Accept": "application/json, text/plain, */*",
+               "Origin": "https://www.yad2.co.il",
+               "Referer": "https://www.yad2.co.il/realestate/rent"}
 
 
 def send(text):
@@ -50,18 +65,14 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False)
 
 
-def fetch_listings():
-    r = requests.get(SEARCH_URL, headers=HEADERS, timeout=30)
-    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
-    if not m:
-        return None, r.status_code
-    data = json.loads(m.group(1))
+def extract_items(data):
     items = {}
 
     def walk(o):
         if isinstance(o, dict):
-            tok = o.get("token")
+            tok = o.get("token") or o.get("link_token")
             if isinstance(tok, str) and ("address" in o or "price" in o):
+                o["token"] = tok
                 items[tok] = o
             for v in o.values():
                 walk(v)
@@ -70,7 +81,49 @@ def fetch_listings():
                 walk(v)
 
     walk(data)
-    return list(items.values()), r.status_code
+    return list(items.values())
+
+
+def diagnose(text):
+    title = re.search(r"<title[^>]*>(.*?)</title>", text, re.S | re.I)
+    title = title.group(1).strip()[:80] if title else "-"
+    low = text.lower()
+    blocked = any(w in low for w in ["captcha", "shieldsquare", "radware", "perfdrive", "are you for real"])
+    return f"title={title!r} blocked_words={blocked} length={len(text)}"
+
+
+def fetch_listings():
+    session = requests.Session()
+    try:
+        session.get("https://www.yad2.co.il/", headers=PAGE_HEADERS, timeout=30)
+    except Exception as e:
+        print("homepage error:", e)
+
+    for kind, url in SOURCES:
+        try:
+            r = session.get(url, headers=PAGE_HEADERS if kind == "page" else API_HEADERS, timeout=30)
+        except Exception as e:
+            print(f"[{kind}] error: {e}")
+            continue
+        print(f"[{kind}] status {r.status_code} | {url}")
+        data = None
+        if kind == "page":
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S)
+            if m:
+                data = json.loads(m.group(1))
+        else:
+            try:
+                data = r.json()
+            except ValueError:
+                pass
+        if data is None:
+            print("   not readable:", diagnose(r.text))
+            continue
+        items = extract_items(data)
+        print(f"   found {len(items)} listings")
+        if items:
+            return items
+    return None
 
 
 def dig(o, *path):
@@ -102,13 +155,13 @@ def to_number(v):
 def describe(item):
     return {
         "token": item["token"],
-        "city": text_of(dig(item, "address", "city")),
-        "neighborhood": text_of(dig(item, "address", "neighborhood")),
-        "street": text_of(dig(item, "address", "street")),
+        "city": text_of(dig(item, "address", "city")) or text_of(item.get("city")),
+        "neighborhood": text_of(dig(item, "address", "neighborhood")) or text_of(item.get("neighborhood")),
+        "street": text_of(dig(item, "address", "street")) or text_of(item.get("street")),
         "house": dig(item, "address", "house", "number"),
         "floor": dig(item, "address", "house", "floor"),
         "price": to_number(item.get("price")),
-        "rooms": to_number(dig(item, "additionalDetails", "roomsCount")) or to_number(item.get("rooms")),
+        "rooms": to_number(dig(item, "additionalDetails", "roomsCount")) or to_number(item.get("rooms") or item.get("Rooms")),
         "sqm": dig(item, "additionalDetails", "squareMeter"),
         "flat": json.dumps(item, ensure_ascii=False),
     }
@@ -142,13 +195,13 @@ def format_message(d):
 
 def main():
     state = load_state()
-    first_run = state is None
-    if first_run:
+    first_run = state is None or not state.get("seen")
+    if state is None:
         state = {"seen": [], "blocked_notified": False}
 
-    listings, status = fetch_listings()
+    listings = fetch_listings()
     if listings is None:
-        print("could not read Yad2, status:", status)
+        print("could not read Yad2 from any source")
         if not state.get("blocked_notified"):
             send("\u26a0\ufe0f \u05d4\u05e1\u05d5\u05e8\u05e7 \u05dc\u05d0 \u05d4\u05e6\u05dc\u05d9\u05d7 \u05dc\u05e7\u05e8\u05d5\u05d0 \u05d0\u05ea \u05d9\u05d32 \u05db\u05e8\u05d2\u05e2 (\u05d9\u05d9\u05ea\u05db\u05df \u05d7\u05e1\u05d9\u05de\u05d4). \u05de\u05de\u05e9\u05d9\u05da \u05dc\u05e0\u05e1\u05d5\u05ea.")
             state["blocked_notified"] = True
